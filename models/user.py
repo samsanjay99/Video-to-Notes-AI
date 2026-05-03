@@ -1,9 +1,12 @@
 import uuid
+import logging
 import bcrypt
 from datetime import datetime, timezone
 from sqlalchemy import String, DateTime, Enum, JSON
 from sqlalchemy.dialects.postgresql import UUID
 from extensions import db
+
+log = logging.getLogger(__name__)
 
 
 class User(db.Model):
@@ -27,7 +30,8 @@ class User(db.Model):
     def verify_password(self, raw: str) -> bool:
         try:
             return bcrypt.checkpw(raw.encode("utf-8"), self.password.encode("utf-8"))
-        except Exception:
+        except Exception as e:
+            log.error("verify_password error for user %s: %s", self.email, e)
             return False
 
     def to_dict(self) -> dict:

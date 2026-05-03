@@ -1,4 +1,5 @@
 import os
+import logging
 from datetime import datetime, timedelta, timezone
 from flask import Blueprint, request, jsonify
 import jwt
@@ -6,6 +7,8 @@ import jwt
 from extensions import db
 from models.user import User
 from middleware.auth import auth_required, SECRET_KEY
+
+log = logging.getLogger(__name__)
 
 auth_bp = Blueprint("auth", __name__)
 
@@ -61,6 +64,7 @@ def login():
         db.session.commit()
 
     if not user or not user.verify_password(password):
+        log.warning("Login failed for email=%s user_found=%s", email, user is not None)
         return jsonify({"success": False, "message": "Invalid email or password"}), 401
 
     return jsonify({"success": True, "token": make_token(user.id), "user": user.to_dict()})
