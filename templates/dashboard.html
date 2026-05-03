@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block nav_dashboard %}active{% endblock %}
+
+{% block content %}
+<div class="fade-in" id="dashboard-root">
+  <div class="page-header">
+    <div>
+      <h1 id="greeting">Good morning 👋</h1>
+      <p class="subtitle">Here's what's happening with your meetings</p>
+    </div>
+    <a href="/upload" class="btn btn-primary">+ New Meeting</a>
+  </div>
+
+  <div class="page-content">
+    <!-- Stats grid -->
+    <div class="grid-4" style="margin-bottom:28px" id="stats-grid">
+      <div class="stat-card"><div class="stat-icon" style="background:var(--accent-glow)">🎙️</div>
+        <div class="stat-label">Total Meetings</div><div class="stat-value" style="color:var(--accent)" id="stat-total">—</div></div>
+      <div class="stat-card"><div class="stat-icon" style="background:var(--green-dim)">✅</div>
+        <div class="stat-label">Completed</div><div class="stat-value" style="color:var(--green)" id="stat-completed">—</div></div>
+      <div class="stat-card"><div class="stat-icon" style="background:var(--teal-dim)">📅</div>
+        <div class="stat-label">This Month</div><div class="stat-value" style="color:var(--teal)" id="stat-month">—</div></div>
+      <div class="stat-card"><div class="stat-icon" style="background:var(--amber-dim)">📋</div>
+        <div class="stat-label">Open Tasks</div><div class="stat-value" style="color:var(--amber)" id="stat-tasks">—</div></div>
+    </div>
+
+    <!-- Recent meetings -->
+    <div class="card" style="margin-bottom:24px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
+        <h2 style="font-size:17px">Recent Meetings</h2>
+        <a href="/history" class="btn btn-ghost btn-sm">View all →</a>
+      </div>
+      <div id="recent-meetings">
+        <div class="skeleton-row"></div>
+        <div class="skeleton-row"></div>
+        <div class="skeleton-row"></div>
+      </div>
+    </div>
+
+    <!-- Quick actions -->
+    <div class="grid-2">
+      <div class="card card-hover" onclick="location.href='/upload'">
+        <div style="display:flex;align-items:center;gap:14px">
+          <div style="width:44px;height:44px;border-radius:12px;background:var(--accent-glow);display:flex;align-items:center;justify-content:center;font-size:22px">⬆️</div>
+          <div><div style="font-weight:600;margin-bottom:3px">Upload New Recording</div>
+            <div style="font-size:13px;color:var(--text-secondary)">MP3, WAV, M4A, MP4 supported</div></div>
+          <span style="margin-left:auto;color:var(--text-muted)">→</span>
+        </div>
+      </div>
+      <div class="card card-hover" onclick="location.href='/history'">
+        <div style="display:flex;align-items:center;gap:14px">
+          <div style="width:44px;height:44px;border-radius:12px;background:var(--teal-dim);display:flex;align-items:center;justify-content:center;font-size:22px">🕒</div>
+          <div><div style="font-weight:600;margin-bottom:3px">Meeting History</div>
+            <div style="font-size:13px;color:var(--text-secondary)">Browse all past meetings</div></div>
+          <span style="margin-left:auto;color:var(--text-muted)">→</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(async () => {
+  // Greeting
+  const h = new Date().getHours();
+  const g = h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
+  const user = JSON.parse(localStorage.getItem('user_cache') || '{}');
+  const firstName = (user.name || '').split(' ')[0] || '';
+  document.getElementById('greeting').textContent = `${g}${firstName ? ', ' + firstName : ''} 👋`;
+
+  try {
+    const data = await api.get('/meetings/stats/overview');
+    const s = data.stats;
+
+    document.getElementById('stat-total').textContent     = s.total;
+    document.getElementById('stat-completed').textContent = s.completed;
+    document.getElementById('stat-month').textContent     = s.thisMonth;
+    document.getElementById('stat-tasks').textContent     = s.actionItems.pending;
+
+    // Update greeting with fresh name
+    const meData = await api.get('/auth/me');
+    const fn = meData.user.name.split(' ')[0];
+    document.getElementById('greeting').textContent = `${g}, ${fn} 👋`;
+    localStorage.setItem('user_cache', JSON.stringify(meData.user));
+
+    const container = document.getElementById('recent-meetings');
+    if (!data.recentMeetings.length) {
+      container.innerHTML = `<div class="empty-state" style="padding:32px 20px">
+        <div style="font-size:32px;margin-bottom:12px">🎙️</div>
+        <h3>No meetings yet</h3>
+        <p>Upload your first meeting recording to get started</p>
+        <a href="/upload" class="btn btn-primary" style="margin-top:12px">+ Upload Recording</a>
+      </div>`;
+    } else {
+      container.innerHTML = data.recentMeetings.map(m => `
+        <div class="meeting-row" onclick="location.href='/meetings/${m.id}'">
+          <div class="meeting-row-icon">🎙️</div>
+          <div style="flex:1;min-width:0">
+            <div style="font-weight:500;font-size:14px;margin-bottom:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(m.title)}</div>
+            <div style="font-size:12px;color:var(--text-muted)">${formatRelative(m.createdAt)}
+              ${m.duration > 0 ? ' · 🕒 ' + formatDuration(m.duration) : ''}
+              ${m.wordCount > 0 ? ' · ' + m.wordCount + ' words' : ''}
+            </div>
+          </div>
+          <span style="color:var(--text-muted)">→</span>
+        </div>
+      `).join('');
+    }
+  } catch (e) {
+    console.error(e);
+  }
+})();
+</script>
+{% endblock %}

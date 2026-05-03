@@ -1,0 +1,346 @@
+{% extends "base.html" %}
+{% block title %}Meeting Detail{% endblock %}
+
+{% block content %}
+<div class="fade-in" id="detail-root">
+  <div style="display:flex;align-items:center;justify-content:center;min-height:60vh">
+    <div class="spinner spinner-lg"></div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const MEETING_ID = '{{ meeting_id }}';
+const PROCESSING = ['uploading','processing','transcribing','analyzing'];
+let meeting = null, pollInterval = null, currentTab = 'summary';
+
+const STATUS_MSG = {
+  uploading:    'Uploading your audio file…',
+  processing:   'Starting AI processing…',
+  transcribing: 'Transcribing audio with Whisper AI…',
+  analyzing:    'Analysing content and extracting action items…',
+};
+const STATUS_PROGRESS = { uploading:'20%', processing:'40%', transcribing:'65%', analyzing:'85%' };
+const STATUS_COLORS   = {
+  completed:'var(--green)', failed:'var(--rose)', uploading:'var(--accent)',
+  processing:'var(--amber)', transcribing:'var(--amber)', analyzing:'var(--amber)'
+};
+
+async function fetchMeeting() {
+  try {
+    const data = await api.get('/meetings/' + MEETING_ID);
+    meeting = data.meeting;
+    render();
+    if (PROCESSING.includes(meeting.status)) startPolling();
+  } catch {
+    showToast('Meeting not found', 'error');
+    setTimeout(() => window.location.href = '/history', 1200);
+  }
+}
+
+function startPolling() {
+  if (pollInterval) clearInterval(pollInterval);
+  pollInterval = setInterval(async () => {
+    try {
+      const d = await api.get('/meetings/' + MEETING_ID + '/status');
+      if (!PROCESSING.includes(d.status)) {
+        clearInterval(pollInterval); pollInterval = null;
+        if (d.status === 'completed') showToast('Meeting processed successfully!', 'success');
+        else if (d.status === 'failed') showToast('Processing failed: ' + (d.error || 'Unknown error'), 'error');
+        fetchMeeting();
+      }
+    } catch { clearInterval(pollInterval); }
+  }, 3000);
+}
+
+function setTab(tab) {
+  currentTab = tab;
+  ['summary','actions','transcript','participants'].forEach(t => {
+    const btn = document.getElementById('tab-' + t);
+    if (btn) btn.setAttribute('data-active', t === tab ? '1' : '0');
+    const panel = document.getElementById('panel-' + t);
+    if (panel) panel.style.display = t === tab ? '' : 'none';
+  });
+  // Re-style buttons
+  ['summary','actions','transcript','participants'].forEach(t => {
+    const btn = document.getElementById('tab-' + t);
+    if (!btn) return;
+    const active = btn.getAttribute('data-active') === '1';
+    btn.style.borderBottom = active ? '2px solid var(--accent)' : '2px solid transparent';
+    btn.style.color        = active ? 'var(--accent-bright)' : 'var(--text-secondary)';
+  });
+}
+
+async function shareLink() {
+  try {
+    const d = await api.post('/meetings/' + MEETING_ID + '/share', {});
+    await navigator.clipboard.writeText(d.shareUrl);
+    showToast('Share link copied to clipboard!', 'success');
+  } catch { showToast('Failed to generate share link', 'error'); }
+}
+
+async function exportFile(type) {
+  showToast('Generating ' + type.toUpperCase() + '…', 'info');
+  try {
+    const token = localStorage.getItem('token');
+    const resp  = await fetch('/api/export/' + MEETING_ID + '/' + type, {
+      headers: { Authorization: 'Bearer ' + token }
+    });
+    if (!resp.ok) throw new Error('Export failed');
+    const blob = await resp.blob();
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url;
+    a.download = (meeting.title.replace(/[^a-z0-9]/gi,'_') || 'Meeting') + '.' + type;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast('Download started', 'success');
+  } catch { showToast('Failed to export ' + type.toUpperCase(), 'error'); }
+}
+
+async function deleteMeeting() {
+  if (!confirm('Delete this meeting? This cannot be undone.')) return;
+  try {
+    await api.del('/meetings/' + MEETING_ID);
+    showToast('Meeting deleted', 'success');
+    setTimeout(() => window.location.href = '/history', 600);
+  } catch { showToast('Failed to delete meeting', 'error'); }
+}
+
+async function toggleActionItem(itemId, completed) {
+  try {
+    const d = await api.patch('/meetings/' + MEETING_ID + '/action-items/' + itemId, { completed });
+    meeting = d.meeting;
+    renderActions();
+  } catch { showToast('Failed to update task', 'error'); }
+}
+
+async function saveAssignee(itemId, assignee) {
+  try {
+    const d = await api.patch('/meetings/' + MEETING_ID + '/action-items/' + itemId, { assignee });
+    meeting = d.meeting;
+    renderActions();
+  } catch { showToast('Failed to update assignee', 'error'); }
+}
+
+// ── RENDER ────────────────────────────────────────────────────────────────────
+function render() {
+  const m = meeting;
+  const isProcessing = PROCESSING.includes(m.status);
+  const badgeColor   = STATUS_COLORS[m.status] || 'var(--text-muted)';
+
+  document.getElementById('detail-root').innerHTML = `
+    <!-- Header -->
+    <div class="page-header" style="flex-direction:column;align-items:stretch;gap:0;padding-bottom:0">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:16px">
+        <div style="display:flex;align-items:flex-start;gap:14px;flex:1">
+          <button class="btn btn-ghost btn-icon" onclick="history.back()">←</button>
+          <div style="flex:1">
+            <h1 style="font-size:22px">${escHtml(m.title)}</h1>
+            <div style="display:flex;align-items:center;gap:14px;margin-top:6px;flex-wrap:wrap">
+              <span style="font-size:13px;color:var(--text-muted)">${formatDate(m.createdAt)}</span>
+              ${m.duration > 0 ? `<span style="font-size:13px;color:var(--text-muted)">🕒 ${formatDuration(m.duration)}</span>` : ''}
+              ${m.wordCount > 0 ? `<span style="font-size:13px;color:var(--text-muted)">${m.wordCount} words</span>` : ''}
+              <span style="display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:20px;font-size:12px;font-weight:500;background:${badgeColor}22;color:${badgeColor}">
+                <span class="status-dot" style="background:${badgeColor}"></span>
+                ${m.status.charAt(0).toUpperCase()+m.status.slice(1)}
+              </span>
+            </div>
+          </div>
+        </div>
+        ${!isProcessing && m.status === 'completed' ? `
+        <div style="display:flex;gap:8px;flex-shrink:0;flex-wrap:wrap">
+          <button class="btn btn-secondary btn-sm" onclick="shareLink()">🔗 Share</button>
+          <button class="btn btn-secondary btn-sm" onclick="exportFile('pdf')">⬇️ PDF</button>
+          <button class="btn btn-secondary btn-sm" onclick="exportFile('docx')">⬇️ DOCX</button>
+          <button class="btn btn-danger btn-sm"    onclick="deleteMeeting()">🗑️</button>
+        </div>` : ''}
+      </div>
+
+      ${(m.tags||[]).length ? `
+      <div style="display:flex;gap:6px;flex-wrap:wrap;padding-left:48px;padding-bottom:16px">
+        ${m.tags.map(t => `<span class="badge badge-muted">🏷️ ${escHtml(t)}</span>`).join('')}
+      </div>` : ''}
+
+      ${!isProcessing ? `
+      <div style="padding-left:16px;padding-right:32px;border-bottom:1px solid var(--border)">
+        <div style="display:flex;gap:0">
+          ${[
+            {key:'summary',     label:'📝 Summary'},
+            {key:'actions',     label:`✅ Actions (${(m.actionItems||[]).length})`},
+            {key:'transcript',  label:'📄 Transcript'},
+            {key:'participants',label:`👥 Participants (${(m.participants||[]).length})`},
+          ].map(({key,label}) => `
+            <button id="tab-${key}" data-active="${key==='summary'?'1':'0'}"
+              onclick="setTab('${key}')"
+              style="padding:12px 16px;font-size:14px;font-weight:500;background:none;border:none;cursor:pointer;transition:all 0.2s;display:flex;align-items:center;gap:6px;margin-bottom:-1px;
+                border-bottom:${key==='summary'?'2px solid var(--accent)':'2px solid transparent'};
+                color:${key==='summary'?'var(--accent-bright)':'var(--text-secondary)'}">
+              ${label}
+            </button>`).join('')}
+        </div>
+      </div>` : ''}
+    </div>
+
+    <div class="page-content">
+      ${isProcessing ? renderProcessing(m) : ''}
+      ${m.status === 'failed' ? renderFailed(m) : ''}
+      ${!isProcessing && m.status === 'completed' ? `
+        <div id="panel-summary">     ${renderSummary(m)}</div>
+        <div id="panel-actions"      style="display:none">${renderActions(m)}</div>
+        <div id="panel-transcript"   style="display:none">${renderTranscript(m)}</div>
+        <div id="panel-participants" style="display:none">${renderParticipants(m)}</div>
+      ` : ''}
+    </div>`;
+}
+
+function renderProcessing(m) {
+  return `<div class="card card-accent" style="max-width:560px;margin:0 auto;text-align:center;padding:40px">
+    <div style="width:64px;height:64px;border-radius:20px;background:var(--accent-glow);display:flex;align-items:center;justify-content:center;margin:0 auto 20px">
+      <div class="spinner spinner-lg" style="border-top-color:var(--accent)"></div>
+    </div>
+    <h2 style="font-size:20px;margin-bottom:10px">Processing your meeting</h2>
+    <p style="color:var(--text-secondary);font-size:14px;margin-bottom:24px">${STATUS_MSG[m.status] || 'Processing…'}</p>
+    <div class="progress-bar" style="margin-bottom:12px">
+      <div class="progress-fill animated" style="width:${STATUS_PROGRESS[m.status]||'20%'}"></div>
+    </div>
+    <p style="font-size:12px;color:var(--text-muted)">This usually takes 1–3 minutes. Page auto-refreshes.</p>
+  </div>`;
+}
+
+function renderFailed(m) {
+  return `<div class="card" style="border-color:var(--rose);background:var(--rose-dim);max-width:560px">
+    <div style="display:flex;gap:12px;align-items:flex-start">
+      <span style="font-size:20px;color:var(--rose);flex-shrink:0;margin-top:2px">✕</span>
+      <div>
+        <div style="font-weight:600;margin-bottom:4px;color:var(--rose)">Processing Failed</div>
+        <div style="font-size:14px;color:var(--text-secondary)">${escHtml(m.processingError||'An unknown error occurred')}</div>
+        <a href="/upload" class="btn btn-secondary btn-sm" style="margin-top:12px;display:inline-flex">Try Again</a>
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderSummary(m) {
+  const s = m.summary || {};
+  if (!s.overview && !s.keyPoints?.length && !s.topics?.length)
+    return `<div class="empty-state"><h3>No summary available</h3></div>`;
+  return `<div style="max-width:760px">
+    ${s.overview ? `<div class="card" style="margin-bottom:20px">
+      <h3 style="font-size:15px;margin-bottom:14px;display:flex;align-items:center;gap:8px">
+        <span style="width:24px;height:24px;border-radius:6px;background:var(--accent-glow);display:inline-flex;align-items:center;justify-content:center">📝</span> Overview
+      </h3>
+      <p style="font-size:14px;line-height:1.8;color:var(--text-secondary)">${escHtml(s.overview)}</p>
+    </div>` : ''}
+    ${s.keyPoints?.length ? `<div class="card" style="margin-bottom:20px">
+      <h3 style="font-size:15px;margin-bottom:14px;display:flex;align-items:center;gap:8px">
+        <span style="width:24px;height:24px;border-radius:6px;background:var(--teal-dim);display:inline-flex;align-items:center;justify-content:center">💡</span> Key Points
+      </h3>
+      ${s.keyPoints.map(p => `<div class="key-point"><div class="key-point-bullet"></div><span class="key-point-text">${escHtml(p)}</span></div>`).join('')}
+    </div>` : ''}
+    ${s.topics?.length ? `<div class="card">
+      <h3 style="font-size:15px;margin-bottom:14px">Topics Discussed</h3>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        ${s.topics.map(t => `<span class="badge badge-teal">${escHtml(t)}</span>`).join('')}
+      </div>
+    </div>` : ''}
+  </div>`;
+}
+
+function renderActions(m_arg) {
+  const m   = m_arg || meeting;
+  const items = m.actionItems || [];
+  if (!items.length)
+    return `<div class="empty-state"><div style="font-size:32px;margin-bottom:12px">✅</div><h3>No action items found</h3><p>No tasks were detected in this meeting</p></div>`;
+
+  const done = items.filter(i => i.completed).length;
+  const pct  = Math.round((done / items.length) * 100);
+
+  return `<div style="max-width:760px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
+      <span style="font-size:14px;color:var(--text-secondary)">${done} of ${items.length} completed</span>
+      <div class="progress-bar" style="width:120px"><div class="progress-fill" style="width:${pct}%"></div></div>
+    </div>
+    ${items.map(item => actionItem(item)).join('')}
+  </div>`;
+}
+
+function actionItem(item) {
+  const pri = item.priority || 'medium';
+  const priClass = pri==='high' ? 'priority-high' : pri==='low' ? 'priority-low' : 'priority-medium';
+  return `<div class="action-item ${item.completed ? 'completed' : ''}" id="ai-${item.id}">
+    <button class="checkbox-custom ${item.completed ? 'checked' : ''}" onclick="toggleActionItem('${item.id}',${!item.completed})">
+      ${item.completed ? '<span style="color:white;font-size:11px;line-height:1">✓</span>' : ''}
+    </button>
+    <div style="flex:1;min-width:0">
+      <div class="action-text">${escHtml(item.task)}</div>
+      <div class="action-meta">
+        <span class="badge ${priClass}">${pri}</span>
+        <button class="btn btn-ghost" style="padding:2px 8px;font-size:12px;border-radius:6px;display:inline-flex;align-items:center;gap:5px"
+          onclick="editAssignee('${item.id}','${escHtml(item.assignee||'')}')">
+          👥 ${item.assignee ? escHtml(item.assignee) : '<span style="color:var(--text-muted)">Assign</span>'} ✏️
+        </button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function editAssignee(itemId, currentVal) {
+  const val = prompt('Enter assignee name:', currentVal);
+  if (val !== null) saveAssignee(itemId, val.trim());
+}
+
+function renderTranscript(m) {
+  const t = m.transcript || {};
+  const segs = t.segments || [];
+  const SPEAKER_COLORS = ['var(--accent-bright)','var(--teal)','var(--amber)','var(--green)'];
+  return `<div style="max-width:760px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
+      <h3 style="font-size:15px">Full Transcript</h3>
+      <button class="btn btn-secondary btn-sm" onclick="copyTranscript()">📋 Copy</button>
+    </div>
+    ${segs.length ? segs.map((seg, i) => {
+        const idx = parseInt((seg.speaker||'1').replace(/\D/g,'') || '1') - 1;
+        const color = SPEAKER_COLORS[idx % 4];
+        return `<div class="transcript-segment">
+          <div class="speaker-label" style="color:${color};border-color:${color}">${escHtml(seg.speaker||'Speaker')}</div>
+          <div>
+            <div class="transcript-text">${escHtml(seg.text||'')}</div>
+            ${seg.startTime!==undefined ? `<div class="transcript-time">${formatDuration(seg.startTime)} – ${formatDuration(seg.endTime)}</div>` : ''}
+          </div>
+        </div>`;
+      }).join('')
+    : `<div class="card" style="padding:24px"><p style="font-size:14px;line-height:1.8;color:var(--text-secondary);white-space:pre-wrap">${escHtml(t.full||'No transcript available')}</p></div>`}
+  </div>`;
+}
+
+function renderParticipants(m) {
+  const ps = m.participants || [];
+  if (!ps.length)
+    return `<div class="empty-state"><div style="font-size:32px;margin-bottom:12px">👥</div><h3>No participants detected</h3><p>Participant names were not found in this transcript</p></div>`;
+  return `<div style="max-width:540px">
+    <h3 style="font-size:15px;margin-bottom:20px">Meeting Participants</h3>
+    ${ps.map((p,i) => {
+      const hue = i * 60;
+      return `<div class="card" style="display:flex;align-items:center;gap:14px;margin-bottom:10px">
+        <div style="width:40px;height:40px;border-radius:50%;background:hsl(${hue},60%,25%);display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:600;color:hsl(${hue},80%,70%);flex-shrink:0">
+          ${(p.name||'?').slice(0,1).toUpperCase()}
+        </div>
+        <div>
+          <div style="font-weight:500;margin-bottom:2px">${escHtml(p.name||'Unknown')}</div>
+          ${p.role ? `<div style="font-size:13px;color:var(--text-muted)">${escHtml(p.role)}</div>` : ''}
+        </div>
+      </div>`;
+    }).join('')}
+  </div>`;
+}
+
+function copyTranscript() {
+  const text = meeting?.transcript?.full || '';
+  navigator.clipboard.writeText(text).then(() => showToast('Copied!', 'success'));
+}
+
+fetchMeeting();
+</script>
+{% endblock %}

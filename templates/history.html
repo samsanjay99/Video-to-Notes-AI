@@ -1,0 +1,156 @@
+{% extends "base.html" %}
+{% block title %}Meeting History{% endblock %}
+{% block nav_history %}active{% endblock %}
+
+{% block content %}
+<div class="fade-in">
+  <div class="page-header">
+    <div>
+      <h1>Meeting History</h1>
+      <p class="subtitle" id="total-label">Loading…</p>
+    </div>
+  </div>
+
+  <div class="page-content">
+    <!-- Search & filters -->
+    <div style="display:flex;gap:12px;margin-bottom:24px;flex-wrap:wrap">
+      <div class="search-bar" style="flex:1;min-width:200px">
+        <span class="icon">🔍</span>
+        <input id="search-input" placeholder="Search meetings…" oninput="onSearch(this.value)" />
+        <button id="clear-search" style="display:none;background:none;border:none;cursor:pointer;color:var(--text-muted)" onclick="clearSearch()">✕</button>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap" id="filter-btns">
+        <button class="btn btn-sm btn-primary"   onclick="setFilter('all')"        id="f-all">All</button>
+        <button class="btn btn-sm btn-secondary" onclick="setFilter('completed')"  id="f-completed">Completed</button>
+        <button class="btn btn-sm btn-secondary" onclick="setFilter('processing')" id="f-processing">Processing</button>
+        <button class="btn btn-sm btn-secondary" onclick="setFilter('failed')"     id="f-failed">Failed</button>
+      </div>
+    </div>
+
+    <!-- Meeting list -->
+    <div id="meetings-list"></div>
+
+    <!-- Pagination -->
+    <div id="pagination" style="display:flex;justify-content:center;gap:8px;margin-top:28px"></div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let currentSearch = '', currentFilter = 'all', currentPage = 1, totalPages = 1;
+let searchTimer = null;
+
+async function loadMeetings(page = 1) {
+  currentPage = page;
+  const list = document.getElementById('meetings-list');
+  list.innerHTML = [1,2,3,4,5].map(() => `
+    <div class="card" style="display:flex;gap:14px;align-items:center;margin-bottom:8px">
+      <div class="skeleton" style="width:44px;height:44px;border-radius:12px;flex-shrink:0"></div>
+      <div style="flex:1"><div class="skeleton" style="height:14px;width:50%;margin-bottom:8px"></div>
+      <div class="skeleton" style="height:12px;width:35%"></div></div>
+    </div>`).join('');
+
+  const params = new URLSearchParams({ page, limit: 15 });
+  if (currentSearch) params.append('search', currentSearch);
+  if (currentFilter !== 'all') params.append('status', currentFilter);
+
+  try {
+    const data = await api.get('/meetings/?' + params.toString());
+    const pag  = data.pagination;
+    totalPages  = pag.pages;
+
+    document.getElementById('total-label').textContent = pag.total + ' total meetings';
+
+    if (!data.meetings.length) {
+      list.innerHTML = `<div class="empty-state">
+        <div style="font-size:40px;margin-bottom:16px">🎙️</div>
+        <h3>${currentSearch || currentFilter !== 'all' ? 'No results found' : 'No meetings yet'}</h3>
+        <p>${currentSearch ? 'Try adjusting your search or filters' : 'Upload your first meeting recording to get started'}</p>
+        ${!currentSearch && currentFilter === 'all' ? '<a href="/upload" class="btn btn-primary" style="margin-top:12px">Upload Recording</a>' : ''}
+      </div>`;
+    } else {
+      list.innerHTML = data.meetings.map(m => meetingCard(m)).join('');
+    }
+
+    renderPagination(pag);
+  } catch (e) {
+    list.innerHTML = `<div class="empty-state"><p style="color:var(--rose)">Failed to load meetings</p></div>`;
+  }
+}
+
+function meetingCard(m) {
+  const statusColors = {
+    completed:'var(--green)', failed:'var(--rose)', uploading:'var(--accent)',
+    processing:'var(--amber)', transcribing:'var(--amber)', analyzing:'var(--amber)'
+  };
+  const color = statusColors[m.status] || 'var(--text-muted)';
+  const tags  = (m.tags||[]).slice(0,2).map(t => `<span class="badge badge-muted">${escHtml(t)}</span>`).join('');
+  return `<div class="card card-hover" style="margin-bottom:8px" onclick="location.href='/meetings/${m.id}'">
+    <div style="display:flex;align-items:center;gap:14px">
+      <div style="width:44px;height:44px;border-radius:12px;background:var(--accent-glow);display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0">🎙️</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:500;font-size:15px;margin-bottom:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(m.title)}</div>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <span style="font-size:12px;color:var(--text-muted)">${formatRelative(m.createdAt)}</span>
+          ${m.duration > 0 ? `<span style="font-size:12px;color:var(--text-muted)">🕒 ${formatDuration(m.duration)}</span>` : ''}
+          <span style="display:flex;align-items:center;gap:5px;font-size:12px">
+            <span class="status-dot" style="background:${color}"></span>
+            <span style="color:${color};text-transform:capitalize">${m.status}</span>
+          </span>
+          ${tags}
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px">
+        <button class="btn btn-ghost btn-icon btn-sm" title="Delete"
+          onclick="deleteMeeting(event,'${m.id}')" style="color:var(--text-muted)"
+          onmouseenter="this.style.color='var(--rose)'" onmouseleave="this.style.color='var(--text-muted)'">🗑️</button>
+        <span style="color:var(--text-muted)">→</span>
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderPagination(pag) {
+  const el = document.getElementById('pagination');
+  if (pag.pages <= 1) { el.innerHTML = ''; return; }
+  el.innerHTML = `
+    <button class="btn btn-secondary btn-sm" ${pag.page <= 1 ? 'disabled' : ''} onclick="loadMeetings(${pag.page - 1})">← Prev</button>
+    <span style="display:flex;align-items:center;font-size:13px;color:var(--text-secondary);padding:0 8px">${pag.page} / ${pag.pages}</span>
+    <button class="btn btn-secondary btn-sm" ${pag.page >= pag.pages ? 'disabled' : ''} onclick="loadMeetings(${pag.page + 1})">Next →</button>`;
+}
+
+function setFilter(f) {
+  currentFilter = f;
+  ['all','completed','processing','failed'].forEach(s => {
+    document.getElementById('f-'+s).className = 'btn btn-sm ' + (s === f ? 'btn-primary' : 'btn-secondary');
+  });
+  loadMeetings(1);
+}
+
+function onSearch(val) {
+  document.getElementById('clear-search').style.display = val ? '' : 'none';
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => { currentSearch = val; loadMeetings(1); }, 350);
+}
+
+function clearSearch() {
+  document.getElementById('search-input').value = '';
+  document.getElementById('clear-search').style.display = 'none';
+  currentSearch = '';
+  loadMeetings(1);
+}
+
+async function deleteMeeting(e, id) {
+  e.stopPropagation();
+  if (!confirm('Delete this meeting? This cannot be undone.')) return;
+  try {
+    await api.del('/meetings/' + id);
+    showToast('Meeting deleted', 'success');
+    loadMeetings(currentPage);
+  } catch { showToast('Failed to delete', 'error'); }
+}
+
+loadMeetings(1);
+</script>
+{% endblock %}

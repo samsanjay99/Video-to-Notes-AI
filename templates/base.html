@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{% block title %}MeetMind{% endblock %} – AI Meeting Notes</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
+</head>
+<body>
+
+{% block body %}
+<!-- Default: app layout with sidebar -->
+<div class="app-layout" id="app-layout">
+
+  <!-- Sidebar overlay (mobile) -->
+  <div class="sidebar-overlay" id="sidebar-overlay" onclick="closeSidebar()"></div>
+
+  <!-- Sidebar -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-logo">
+      <div class="sidebar-logo-mark">
+        <div class="logo-icon">🎙️</div>
+        <span class="logo-text">MeetMind</span>
+      </div>
+    </div>
+
+    <nav class="sidebar-nav">
+      <div class="nav-section-label">Navigation</div>
+      <a href="/dashboard" class="nav-item {% block nav_dashboard %}{% endblock %}">
+        <span class="icon">📊</span> Dashboard
+      </a>
+      <a href="/upload" class="nav-item {% block nav_upload %}{% endblock %}">
+        <span class="icon">⬆️</span> New Meeting
+      </a>
+      <a href="/history" class="nav-item {% block nav_history %}{% endblock %}">
+        <span class="icon">🕒</span> History
+      </a>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="user-card" id="user-card" onclick="handleLogout()" title="Click to logout">
+        <div class="user-avatar" id="user-avatar">?</div>
+        <div class="user-info">
+          <div class="user-name" id="user-name">Loading…</div>
+          <div class="user-role">Click to logout</div>
+        </div>
+        <span style="color:var(--text-muted);font-size:14px">→</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Main content -->
+  <main class="main-content">
+    <!-- Mobile top bar -->
+    <div class="sidebar-toggle">
+      <button class="btn btn-ghost btn-icon" onclick="openSidebar()">☰</button>
+      <div class="sidebar-logo-mark" style="margin-left:8px">
+        <div class="logo-icon" style="font-size:14px">🎙️</div>
+        <span class="logo-text" style="font-size:16px">MeetMind</span>
+      </div>
+    </div>
+
+    <!-- Page content injected here -->
+    {% block content %}{% endblock %}
+  </main>
+</div>
+{% endblock %}
+
+<!-- Toast container -->
+<div id="toast-container"></div>
+
+<script src="{{ url_for('static', filename='js/helpers.js') }}"></script>
+<script src="{{ url_for('static', filename='js/api.js') }}"></script>
+<script>
+  // ── Auth guard & user hydration ─────────────────────────────────────────────
+  (function () {
+    const token = localStorage.getItem('token');
+    const isPublic = ['/login', '/register'].some(p => location.pathname.startsWith(p)) ||
+                     location.pathname.startsWith('/shared/');
+    if (!token && !isPublic) {
+      window.location.href = '/login';
+      return;
+    }
+    if (token && !isPublic) {
+      api.get('/auth/me')
+        .then(r => {
+          const u = r.user;
+          document.getElementById('user-name').textContent = u.name;
+          document.getElementById('user-avatar').textContent = getInitials(u.name);
+        })
+        .catch(() => {
+          localStorage.removeItem('token');
+          window.location.href = '/login';
+        });
+    }
+  })();
+
+  function openSidebar()  { document.getElementById('sidebar').classList.add('open'); document.getElementById('sidebar-overlay').style.display='block'; }
+  function closeSidebar() { document.getElementById('sidebar').classList.remove('open'); document.getElementById('sidebar-overlay').style.display='none'; }
+  function handleLogout() {
+    localStorage.removeItem('token');
+    showToast('Logged out successfully', 'success');
+    setTimeout(() => window.location.href = '/login', 600);
+  }
+</script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

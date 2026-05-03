@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: meetmind
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn "app:create_app()"
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: FLASK_ENV
+        value: production
+      - key: FRONTEND_URL
+        sync: false
+    healthCheckPath: /api/health
